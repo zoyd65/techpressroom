@@ -19,4 +19,4 @@ RSS_FEEDS = [
     "https://www.wired.it/feed/",
 ]
 
-def estrai_articoli_ultime_ore(url, o_
+def estrai_articoli_ultime_ore(url, ore):
