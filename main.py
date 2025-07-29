@@ -1,78 +1,82 @@
 import feedparser
-import os
-import asyncio
 import requests
-from telegram import Bot
+import os
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
-telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-user_id = int(os.getenv("TELEGRAM_USER_ID"))
-hf_api_key = os.getenv("HF_API_KEY")
-bot = Bot(token=telegram_token)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
 RSS_FEEDS = [
     "https://techcrunch.com/feed/",
+    "https://thenextweb.com/feed/",
     "https://www.theverge.com/rss/index.xml",
-    "http://feeds.arstechnica.com/arstechnica/index",
-    "https://www.technologyreview.com/feed/",
-    "https://www.agendadigitale.eu/feed/",
-    "https://www.iltascabile.com/feed/",
-    "https://www.valigiablu.it/feed/",
-    "https://www.scienzainrete.it/rss",
-    "https://aeon.co/feed.rss",
-    "https://knowablemagazine.org/rss",
-    "https://www.futurity.org/feed/",
-    "https://www.inverse.com/rss"
+    "https://spectrum.ieee.org/rss/fulltext",
+    "https://www.01net.it/feed/",
+    "https://www.wired.it/feed/",
+    "https://www.ictbusiness.it/feed",
 ]
 
-async def fetch_and_summarize_articles():
-    all_articles = []
-    for url in RSS_FEEDS:
-        feed = feedparser.parse(url)
-        for entry in feed.entries:
-            if "title" in entry and "link" in entry:
-                all_articles.append({
-                    "title": entry.title,
-                    "link": entry.link
-                })
-    return all_articles[:15]
+def estrai_articoli(rss_url):
+    feed = feedparser.parse(rss_url)
+    articoli = []
+    for entry in feed.entries[:2]:
+        articoli.append({
+            "title": entry.title,
+            "link": entry.link,
+            "summary": entry.summary if "summary" in entry else "",
+            "content": entry.get("content", [{"value": ""}])[0]["value"]
+        })
+    return articoli
 
-def summarize_with_huggingface(title, link):
-    headers = {"Authorization": f"Bearer {hf_api_key}"}
-    prompt = f"Scrivi una sintesi in tono giornalistico della notizia:
-Titolo: {title}
-Link: {link}"
-    json_data = {
-        "inputs": prompt,
-        "parameters": {"max_new_tokens": 80}
+def sintetizza_articolo(title, summary, content):
+    prompt = f"""Scrivi una sintesi in tono giornalistico della notizia:
+{title}
+{summary}
+{content}
+"""
+    response = requests.post(
+        "https://api.openrouter.ai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "openai/gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": prompt}]
+        }
+    )
+
+    if response.status_code == 200:
+        return response.json()['choices'][0]['message']['content'].strip()
+    else:
+        return f"Errore nella sintesi: {response.text}"
+
+def invia_telegram(messaggio):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {
+        "chat_id": TELEGRAM_USER_ID,
+        "text": messaggio,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": False
     }
-    try:
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
-            headers=headers,
-            json=json_data,
-            timeout=20
-        )
-        response.raise_for_status()
-        result = response.json()
-        if isinstance(result, list) and "generated_text" in result[0]:
-            return result[0]["generated_text"].strip()
-        else:
-            return "Errore nella sintesi HuggingFace."
-    except Exception as e:
-        return f"Errore: {e}"
+    requests.post(url, data=data)
 
-async def send_rassegna():
-    await bot.send_message(chat_id=user_id, text="🗞️ *Rassegna stampa tech di oggi:*", parse_mode="Markdown")
-    articles = await fetch_and_summarize_articles()
-    for art in articles:
-        sintesi = summarize_with_huggingface(art["title"], art["link"])
-        msg = f"*{art['title']}*
-{sintesi}
-🔗 {art['link']}"
-        await bot.send_message(chat_id=user_id, text=msg, parse_mode="Markdown")
+def main():
+    all_articles = []
+    for feed in RSS_FEEDS:
+        all_articles.extend(estrai_articoli(feed))
+
+    oggi = datetime.now().strftime("%d/%m/%Y")
+    invia_telegram(f"🗞️ *Rassegna stampa tech – {oggi}*")
+
+    for art in all_articles[:10]:
+        sintesi = sintetizza_articolo(art["title"], art["summary"], art["content"])
+        msg = f"*{art['title']}*\n{sintesi}\n🔗 {art['link']}"
+        invia_telegram(msg)
 
 if __name__ == "__main__":
-    asyncio.run(send_rassegna())
+    main()
