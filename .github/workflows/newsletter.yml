@@ -2,8 +2,8 @@ name: Tech Newsletter Daily
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Esegui ogni giorno alle 8:00 ora italiana (6:00 UTC)
-  workflow_dispatch:     # Permette di eseguirlo manualmente
+    - cron: '0 6 * * *'  # 08:00 ora italiana
+  workflow_dispatch:
 
 jobs:
   run-newsletter:
