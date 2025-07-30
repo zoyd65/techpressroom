@@ -2,12 +2,13 @@ name: Tech Newsletter Daily
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # 08:00 ora italiana
-  workflow_dispatch:
+    - cron: '0 6 * * *'  # Esegui ogni giorno alle 8:00 ora italiana (6:00 UTC)
+  workflow_dispatch:      # Permette l'esecuzione manuale
 
 jobs:
   run-newsletter:
     runs-on: ubuntu-latest
+
     steps:
       - name: Clona il repository
         uses: actions/checkout@v3
@@ -21,6 +22,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Verifica segreti
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_USER_ID: ${{ secrets.TELEGRAM_USER_ID }}
+          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
+        run: python test_env.py
 
       - name: Esegui script newsletter
         env:
