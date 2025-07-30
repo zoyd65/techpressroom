@@ -66,6 +66,10 @@ Sintesi:"""
             return data["generated_text"].strip()
     return "Sintesi non disponibile."
 
+print("Messaggio inviato a Telegram:")
+print(messaggio)
+
+
 def invia_telegram(messaggio):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
