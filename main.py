@@ -3,20 +3,20 @@ import requests
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import traceback
 
 load_dotenv()
 
-# Carica variabili d'ambiente
+# === Variabili d'ambiente ===
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID", "").strip()
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "").strip()
 
-# Validazione minima
+# === Controllo preliminare ===
 if not TELEGRAM_BOT_TOKEN or not TELEGRAM_USER_ID or not HUGGINGFACE_API_KEY:
-    print("❌ Errore: Variabili d'ambiente mancanti.")
-    exit(1)
+    raise EnvironmentError("❌ Variabili d'ambiente mancanti")
 
-# Lista RSS
+# === Configurazione ===
 RSS_FEEDS = [
     "https://www.hdblog.it/rss/",
     "https://www.smartworld.it/feed/rss",
@@ -26,11 +26,26 @@ RSS_FEEDS = [
     "https://www.wired.it/feed/",
 ]
 
+LOG_FILE = "log.txt"
+
+# === Funzioni di supporto ===
+
+def log(msg):
+    timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+    with open(LOG_FILE, "a") as f:
+        f.write(f"{timestamp} {msg}\n")
+    print(msg)
+
+def escape_markdown(text):
+    for c in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+        text = text.replace(c, f'\\{c}')
+    return text
+
 def estrai_articoli_ultime_ore(url, ore=12):
     articoli = []
-    ora_limite = datetime.now() - timedelta(hours=ore)
     try:
         feed = feedparser.parse(url)
+        ora_limite = datetime.now() - timedelta(hours=ore)
         for entry in feed.entries:
             if "published_parsed" in entry:
                 data = datetime(*entry.published_parsed[:6])
@@ -46,7 +61,7 @@ def estrai_articoli_ultime_ore(url, ore=12):
                     "content": entry.get("content", [{"value": ""}])[0]["value"]
                 })
     except Exception as e:
-        print(f"⚠️ Errore nel parsing RSS: {url}\n{e}")
+        log(f"⚠️ Errore nel parsing RSS da {url}: {e}")
     return articoli
 
 def sintetizza_articolo(titolo, riassunto, contenuto):
@@ -63,10 +78,7 @@ Sintesi:"""
                 "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
                 "Content-Type": "application/json"
             },
-            json={
-                "inputs": prompt,
-                "parameters": {"max_new_tokens": 300}
-            },
+            json={"inputs": prompt, "parameters": {"max_new_tokens": 300}},
             timeout=30
         )
 
@@ -77,64 +89,9 @@ Sintesi:"""
             elif isinstance(data, dict) and "generated_text" in data:
                 return data["generated_text"].strip()
         else:
-            print(f"⚠️ HuggingFace API error {response.status_code}: {response.text}")
+            log(f"⚠️ HuggingFace errore {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Errore durante la richiesta a HuggingFace:\n{e}")
+        log(f"❌ Errore HuggingFace: {e}")
     return "Sintesi non disponibile."
 
-def invia_telegram(messaggio):
-    if len(messaggio) > 4096:
-        messaggio = messaggio[:4093] + "..."
-
-    payload = {
-        "chat_id": TELEGRAM_USER_ID,
-        "text": messaggio,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json=payload,
-            timeout=15
-        )
-        if not response.ok:
-            print(f"⚠️ Errore invio Telegram: {response.status_code} - {response.text}")
-        return response.ok
-    except Exception as e:
-        print(f"❌ Errore durante l'invio a Telegram:\n{e}")
-        return False
-
-def escape_markdown(text):
-    # Escape per i caratteri riservati in Telegram Markdown
-    for c in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
-        text = text.replace(c, f'\\{c}')
-    return text
-
-def main():
-    print("🚀 Avvio raccolta notizie...")
-    tutti_articoli = []
-    for feed in RSS_FEEDS:
-        articoli = estrai_articoli_ultime_ore(feed, ore=12)
-        print(f"📡 {feed}: {len(articoli)} articoli trovati")
-        tutti_articoli.extend(articoli)
-
-    if not tutti_articoli:
-        invia_telegram("🕓 Nessuna nuova notizia trovata nelle ultime 12 ore.")
-        print("✅ Nessuna notizia trovata. Messaggio inviato.")
-        return
-
-    print(f"📰 Trovati {len(tutti_articoli)} articoli. Generazione sintesi...")
-
-    for art in tutti_articoli[:10]:  # Limite a 10 articoli per messaggi brevi
-        titolo = escape_markdown(art["title"])
-        link = art["link"]
-        sintesi = sintetizza_articolo(art["title"], art["summary"], art["content"])
-        msg = f"*{titolo}*\n{sintesi}\n[Leggi di più]({link})"
-        print("📨 Invio messaggio...")
-        invia_telegram(msg)
-
-    print("✅ Completato. Tutti i messaggi sono stati inviati.")
-
-if __name__ == "__main__":
-    main()
+def invia_telegram(m_
