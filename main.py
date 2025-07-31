@@ -1,97 +1,79 @@
-import feedparser
-import requests
 import os
+import requests
+import feedparser
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-import traceback
 
 load_dotenv()
 
-# === Variabili d'ambiente ===
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID", "").strip()
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "").strip()
+RSS_FEED_URL = "https://www.wired.it/feed"
 
-# === Controllo preliminare ===
-if not TELEGRAM_BOT_TOKEN or not TELEGRAM_USER_ID or not HUGGINGFACE_API_KEY:
-    raise EnvironmentError("❌ Variabili d'ambiente mancanti")
+def get_articles():
+    feed = feedparser.parse(RSS_FEED_URL)
+    yesterday = datetime.utcnow() - timedelta(days=1)
+    articles = []
 
-# === Configurazione ===
-RSS_FEEDS = [
-    "https://www.hdblog.it/rss/",
-    "https://www.smartworld.it/feed/rss",
-    "https://techprincess.it/feed/",
-    "https://www.tomshw.it/feed/",
-    "https://www.hwupgrade.it/rss/all.xml",
-    "https://www.wired.it/feed/",
-]
+    for entry in feed.entries:
+        published = datetime(*entry.published_parsed[:6])
+        if published > yesterday:
+            content = entry.get("content", [{"value": ""}])[0]["value"]
+            articles.append({
+                "title": entry.title,
+                "link": entry.link,
+                "summary": entry.get("summary", ""),
+                "content": content
+            })
 
-LOG_FILE = "log.txt"
+    return articles
 
-# === Funzioni di supporto ===
+def sintetizza_articolo(titolo, descrizione, contenuto):
+    prompt = (
+        f"Scrivi una sintesi in tono giornalistico della notizia:\n"
+        f"TITOLO: {titolo}\n"
+        f"DESCRIZIONE: {descrizione}\n"
+        f"CONTENUTO: {contenuto}\n"
+        f"Rispondi con un breve testo giornalistico."
+    )
 
-def log(msg):
-    timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    with open(LOG_FILE, "a") as f:
-        f.write(f"{timestamp} {msg}\n")
-    print(msg)
+    response = requests.post(
+        "https://api.openrouter.ai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {os.getenv('HUGGINGFACE_API_KEY')}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "mistralai/mixtral-8x7b-instruct",
+            "messages": [{"role": "user", "content": prompt}]
+        }
+    )
 
-def escape_markdown(text):
-    for c in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
-        text = text.replace(c, f'\\{c}')
-    return text
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"]
 
-def estrai_articoli_ultime_ore(url, ore=12):
-    articoli = []
-    try:
-        feed = feedparser.parse(url)
-        ora_limite = datetime.now() - timedelta(hours=ore)
-        for entry in feed.entries:
-            if "published_parsed" in entry:
-                data = datetime(*entry.published_parsed[:6])
-            elif "updated_parsed" in entry:
-                data = datetime(*entry.updated_parsed[:6])
-            else:
-                continue
-            if data > ora_limite:
-                articoli.append({
-                    "title": entry.title,
-                    "link": entry.link,
-                    "summary": entry.get("summary", ""),
-                    "content": entry.get("content", [{"value": ""}])[0]["value"]
-                })
-    except Exception as e:
-        log(f"⚠️ Errore nel parsing RSS da {url}: {e}")
-    return articoli
+def invia_telegram(msg: str):
+    url = f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/sendMessage"
+    payload = {
+        "chat_id": os.getenv("TELEGRAM_USER_ID"),
+        "text": msg,
+        "parse_mode": "HTML"
+    }
+    response = requests.post(url, json=payload)
+    response.raise_for_status()
 
-def sintetizza_articolo(titolo, riassunto, contenuto):
-    prompt = f"""Scrivi una sintesi in tono giornalistico della notizia:
-Titolo: {titolo}
-Riassunto: {riassunto}
-Contenuto: {contenuto}
-Sintesi:"""
+def main():
+    articoli = get_articles()
+    if not articoli:
+        invia_telegram("Nessuna nuova notizia da Wired nelle ultime 24 ore.")
+        return
 
-    try:
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1",
-            headers={
-                "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={"inputs": prompt, "parameters": {"max_new_tokens": 300}},
-            timeout=30
-        )
+    for art in articoli:
+        try:
+            sintesi = sintetizza_articolo(art["title"], art["summary"], art["content"])
+            messaggio = f"<b>{art['title']}</b>\n{art['link']}\n\n{sintesi}"
+            invia_telegram(messaggio)
+        except Exception as e:
+            invia_telegram(f"Errore durante l'elaborazione di un articolo: {e}")
 
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, list) and "generated_text" in data[0]:
-                return data[0]["generated_text"].strip()
-            elif isinstance(data, dict) and "generated_text" in data:
-                return data["generated_text"].strip()
-        else:
-            log(f"⚠️ HuggingFace errore {response.status_code}: {response.text}")
-    except Exception as e:
-        log(f"❌ Errore HuggingFace: {e}")
-    return "Sintesi non disponibile."
-
-def invia_telegram(m_
+if __name__ == "__main__":
+    main()
