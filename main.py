@@ -67,15 +67,20 @@ def notizie_delle_ultime_24_ore(feed_url):
     ieri = now - datetime.timedelta(days=1)
 
     for entry in feed.entries:
-        if hasattr(entry, 'published_parsed'):
+        if not hasattr(entry, 'published_parsed') or entry.published_parsed is None:
+            continue  # salta se manca la data
+        try:
             data_pubblicazione = datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc)
-            if data_pubblicazione > ieri:
-                notizie.append({
-                    "title": entry.title,
-                    "link": entry.link,
-                    "summary": entry.get("summary", ""),
-                    "content": entry.get("content", [{"value": ""}])[0]["value"] if "content" in entry else ""
-                })
+        except Exception:
+            continue  # in caso di errore nel parsing, ignora l'articolo
+
+        if data_pubblicazione > ieri:
+            notizie.append({
+                "title": entry.title,
+                "link": entry.link,
+                "summary": entry.get("summary", ""),
+                "content": entry.get("content", [{"value": ""}])[0]["value"] if "content" in entry else ""
+            })
     return notizie
 
 def main():
