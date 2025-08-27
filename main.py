@@ -1,6 +1,6 @@
 import feedparser
-import requests
 import os
+import requests
 import datetime
 from dotenv import load_dotenv
 
@@ -23,87 +23,71 @@ RSS_FEEDS = [
     "https://knowablemagazine.org/rss",
     "https://www.futurity.org/feed/",
     "https://www.inverse.com/rss",
-    "https://thenextweb.com/feed/"
+    "https://thenextweb.com/feed/",
 ]
 
 def sintetizza_articolo(titolo, descrizione, contenuto):
-    prompt = f"""Scrivi una sintesi in tono giornalistico della notizia:
-Titolo: {titolo}
-Descrizione: {descrizione}
-Contenuto: {contenuto}
-Restituisci solo un paragrafo conciso in italiano."""
-
-    headers = {
-        "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "messages": [
-            {"role": "system", "content": "Sei un assistente esperto di giornalismo tecnologico."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.7
-    }
-
-    response = requests.post("https://api.openrouter.ai/v1/chat/completions", headers=headers, json=payload)
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"].strip()
-
-def invia_telegram(messaggio):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_USER_ID,
-        "text": messaggio,
-        "parse_mode": "Markdown"
-    }
-    response = requests.post(url, json=payload)
-    response.raise_for_status()
+    """Sintetizza la notizia usando HuggingFace."""
+    testo = f"TITOLO: {titolo}\n\nDESCRIZIONE: {descrizione}\n\nCONTENUTO: {contenuto}"
+    try:
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/facebook/bart-large-cnn",
+            headers={"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"},
+            json={"inputs": testo, "parameters": {"min_length": 30, "max_length": 80}},
+            timeout=60
+        )
+        if response.status_code == 200:
+            return response.json()[0]["summary_text"]
+        else:
+            return f"(Sintesi non disponibile, errore HuggingFace {response.status_code})"
+    except Exception as e:
+        return f"(Errore sintesi: {e})"
 
 def notizie_delle_ultime_24_ore(feed_url):
     feed = feedparser.parse(feed_url)
     notizie = []
-    now = datetime.datetime.now(datetime.timezone.utc)
-    ieri = now - datetime.timedelta(days=1)
+    adesso = datetime.datetime.now(datetime.timezone.utc)
+    limite = adesso - datetime.timedelta(days=1)
 
     for entry in feed.entries:
-        if not hasattr(entry, 'published_parsed') or entry.published_parsed is None:
-            continue  # salta se manca la data
-        try:
-            data_pubblicazione = datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc)
-        except Exception:
-            continue  # in caso di errore nel parsing, ignora l'articolo
+        data_pubblicazione = None
 
-        if data_pubblicazione > ieri:
+        if hasattr(entry, "published_parsed") and entry.published_parsed:
+            data_pubblicazione = datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc)
+        elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
+            data_pubblicazione = datetime.datetime(*entry.updated_parsed[:6], tzinfo=datetime.timezone.utc)
+
+        # Se non c’è data, includiamo comunque la notizia
+        if data_pubblicazione is None or data_pubblicazione > limite:
             notizie.append({
-                "title": entry.title,
-                "link": entry.link,
+                "title": entry.get("title", "Senza titolo"),
+                "link": entry.get("link", ""),
                 "summary": entry.get("summary", ""),
-                "content": entry.get("content", [{"value": ""}])[0]["value"] if "content" in entry else ""
+                "content": entry.get("content", [{}])[0].get("value", "")
             })
     return notizie
 
+def invia_telegram(messaggio):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_USER_ID, "text": messaggio, "parse_mode": "Markdown"}
+    response = requests.post(url, data=payload)
+    response.raise_for_status()
+
 def main():
     tutte_le_notizie = []
-
     for feed_url in RSS_FEEDS:
         tutte_le_notizie.extend(notizie_delle_ultime_24_ore(feed_url))
 
     if not tutte_le_notizie:
-        invia_telegram("Nessuna nuova notizia tecnologica trovata nelle ultime 24 ore.")
+        invia_telegram("⚠️ Nessuna notizia trovata nelle ultime 24 ore.")
         return
 
-    sintesi_finale = "*🗞️ Rassegna Tecnologica Quotidiana*\n\n"
+    invia_telegram("🗞️ *Rassegna Stampa Tech di oggi:*")
 
-    for art in tutte_le_notizie[:10]:  # max 10 articoli per non superare limiti Telegram
-        try:
-            sintesi = sintetizza_articolo(art["title"], art["summary"], art["content"])
-            sintesi_finale += f"*{art['title']}*\n{sintesi}\n[Leggi di più]({art['link']})\n\n"
-        except Exception as e:
-            print(f"Errore durante la sintesi o l'invio dell'articolo: {e}")
-            continue
-
-    invia_telegram(sintesi_finale)
+    for art in tutte_le_notizie[:15]:
+        sintesi = sintetizza_articolo(art["title"], art["summary"], art["content"])
+        msg = f"*{art['title']}*\n{sintesi}\n🔗 {art['link']}"
+        invia_telegram(msg)
 
 if __name__ == "__main__":
     main()
